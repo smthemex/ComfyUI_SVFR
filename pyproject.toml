@@ -1,0 +1,15 @@
+[project]
+name = "comfyui_svfr"
+description = "SVFR is a unified framework for face video restoration that supports tasks such as BFR, Colorization, Inpainting，you can use it in ComfyUI"
+version = "1.0.0"
+license = "LICENSE"
+dependencies = ["accelerate", "diffusers", "moviepy", "numpy", "omegaconf", "opencv-python", "scikit-video", "transformers"]
+
+[project.urls]
+Repository = "https://github.com/smthemex/ComfyUI_SVFR"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = "smthemex"
+DisplayName = "ComfyUI_SVFR"
+Icon = ""
