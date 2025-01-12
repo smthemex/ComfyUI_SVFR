@@ -1,0 +1,8 @@
+accelerate
+diffusers
+moviepy
+numpy
+omegaconf
+opencv-python
+scikit-video
+transformers
