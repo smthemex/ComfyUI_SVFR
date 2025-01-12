@@ -38,7 +38,7 @@ class SVFR_LoadModel:
                                  "id" in i]
         return {
             "required": {
-                "I2V_repo": ("STRING", {"default": "F:/test/ComfyUI/models/diffusers/stabilityai/stable-video-diffusion-img2vid-xt-1-1"}),
+                "I2V_repo": ("STRING", {"default": "stabilityai/stable-video-diffusion-img2vid-xt"}),
                 "unet": (["none"] + unet_ckpt_list,),
                 "yolo_ckpt": (["none"] + yolo_ckpt_list,),
                 "id_ckpt": (["none"] + id_ckpt_list,),
