@@ -49,8 +49,4 @@ pip install -r requirements.txt
       primaryClass={cs.CV},
       url={https://arxiv.org/abs/2501.01235}, 
 }
-``
-
-
-
-
+```
