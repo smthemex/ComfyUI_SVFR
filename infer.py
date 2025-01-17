@@ -21,16 +21,17 @@ from .src.models.id_proj import IDProjConvModel
 from .src.models import model_insightface_360k
 from .src.dataset.face_align.align import AlignImage
 from .src.models.svfr_adapter.unet_3d_svd_condition_ip import UNet3DConditionSVDModel
-from .src.dataset.dataset import get_affine_transform, mean_face_lm5p_256
+from .src.dataset.dataset import get_affine_transform, mean_face_lm5p_256,get_union_bbox, process_bbox, crop_resize_img
 
 warnings.filterwarnings("ignore")
 
 
-def main_loader(weight_dtype, repo, unet_path, det_path, id_path, face_path,device):
-    vae = AutoencoderKLTemporalDecoder.from_pretrained(repo, subfolder="vae", variant="fp16")
+def main_loader(weight_dtype, repo, unet_path, det_path, id_path, face_path,device,dtype):
+
+    vae = AutoencoderKLTemporalDecoder.from_pretrained(repo, subfolder="vae", variant=dtype)
     val_noise_scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
-    image_encoder = CLIPVisionModelWithProjection.from_pretrained(repo, subfolder="image_encoder", variant="fp16")
-    unet = UNet3DConditionSVDModel.from_pretrained(repo, subfolder="unet", variant="fp16")
+    image_encoder = CLIPVisionModelWithProjection.from_pretrained(repo, subfolder="image_encoder", variant=dtype)
+    unet = UNet3DConditionSVDModel.from_pretrained(repo, subfolder="unet", variant=dtype)
     
     align_instance = AlignImage(device, det_path=det_path)
     
@@ -97,7 +98,7 @@ def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_
                  mask_array,
                  save_video, decode_chunk_size, noise_aug_strength, min_appearance_guidance_scale,
                  max_appearance_guidance_scale,
-                 overlap, i2i_noise_strength, steps, n_sample_frames,device):
+                 overlap, i2i_noise_strength, steps, n_sample_frames,device,crop_face_region):
     to_tensor = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
@@ -123,7 +124,8 @@ def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_
         print(os.path.join(save_dir, "result_frames", video_name[:-4]))
         # continue
     
-    # cap = decord.VideoReader(input_frames_pil, fault_tol=1)
+    #import decord
+    #cap = decord.VideoReader(input_frames_pil, fault_tol=1)
     
     total_frames = len(input_frames_pil)
     T = total_frames  #
@@ -133,10 +135,35 @@ def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_
     drive_idx_list = list(range(drive_idx_start, drive_idx_start + T * step, step))
     assert len(drive_idx_list) == T
     
+    if crop_face_region:
+        # Crop faces from the video for further processing
+        bbox_list = []
+        frame_interval = 5
+        for frame_count, drive_idx in enumerate(drive_idx_list):
+            if frame_count % frame_interval != 0:
+                continue  
+            frame = np.array(input_frames_pil[drive_idx])
+            _, _, bboxes_list = align_instance(frame[:,:,[2,1,0]], maxface=True)
+            if bboxes_list==[]:
+                continue
+            x1, y1, ww, hh = bboxes_list[0]
+            x2, y2 = x1 + ww, y1 + hh
+            bbox = [x1, y1, x2, y2]
+            bbox_list.append(bbox)
+        bbox = get_union_bbox(bbox_list)
+        bbox_s = process_bbox(bbox, expand_radio=0.4, height=frame.shape[0], width=frame.shape[1])
+
+
     imSameIDs = []
     vid_gt = []
     for i, drive_idx in enumerate(drive_idx_list):
         imSameID = input_frames_pil[drive_idx]
+        #imSameID = Image.fromarray(frame)
+        if crop_face_region:
+            imSameID = crop_resize_img(imSameID, bbox_s)
+        if 1 in task_ids:
+            imSameID = imSameID.convert("L")  # Convert to grayscale
+            imSameID = imSameID.convert("RGB")
         image_array = np.array(imSameID)
         if 2 in task_ids and isinstance(mask_array, np.ndarray):
             image_array[white_positions] = [255, 255, 255]  # mask for inpainting task
@@ -202,7 +229,7 @@ def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_
     video = pipe(
         lq_frames.to(device).to(weight_dtype),  # lq
         ref_img_tensor.to(device).to(weight_dtype),
-        id_embedding.unsqueeze(1).repeat(1, len(lq_frames), 1, 1).to("cuda").to(weight_dtype),  # encoder_hidden_states
+        id_embedding.unsqueeze(1).repeat(1, len(lq_frames), 1, 1).to(device).to(weight_dtype),  # encoder_hidden_states
         task_id_input.to(device).to(weight_dtype),
         height=height,
         width=width,
