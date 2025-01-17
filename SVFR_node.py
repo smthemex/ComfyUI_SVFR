@@ -4,7 +4,7 @@ import numpy as np
 import os
 import torch
 from .infer import main_loader,main_sampler
-from .node_utils import nomarl_upscale,tensor_upscale
+from .node_utils import nomarl_upscale,tensor_upscale,cf_tensor2cv
 
 import folder_paths
 
@@ -68,7 +68,7 @@ class SVFR_LoadModel:
             det_path=folder_paths.get_full_path("SVFR",yolo_ckpt)
             id_path=folder_paths.get_full_path("SVFR",id_ckpt)
             face_path=folder_paths.get_full_path("SVFR",insightface)
-            pipe,id_linear,net_arcface,align_instance=main_loader(weight_dtype,I2V_repo,unet_path,det_path,id_path,face_path,device)
+            pipe,id_linear,net_arcface,align_instance=main_loader(weight_dtype,I2V_repo,unet_path,det_path,id_path,face_path,device,dtype)
         print("****** Load model is done.******")
         return (
         {"pipe": pipe, "id_linear": id_linear, "net_arcface": net_arcface, "align_instance": align_instance, "weight_dtype": weight_dtype},)
@@ -95,6 +95,7 @@ class SVFR_Sampler:
                 "i2i_noise_strength": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 1.0, "step": 0.1, "round": 0.01}),
                 "infer_mode":(["bfr","colorization","inpainting","bfr_color","bfr_color_inpaint"],),
                 "save_video": ("BOOLEAN", {"default": False},),
+                "crop_face_region": ("BOOLEAN", {"default": True},),
             },
             "optional": {"mask": ("MASK",),
                          },
@@ -106,7 +107,7 @@ class SVFR_Sampler:
     CATEGORY = "SVFR"
     
     def sampler_main(self, image, model, seed, width, height,decode_chunk_size,n_sample_frames
-                     , steps,noise_aug_strength, overlap,min_appearance_guidance_scale,max_appearance_guidance_scale, i2i_noise_strength,infer_mode,save_video,**kwargs):
+                     , steps,noise_aug_strength, overlap,min_appearance_guidance_scale,max_appearance_guidance_scale, i2i_noise_strength,infer_mode,save_video,crop_face_region,**kwargs):
         
         pipe = model.get("pipe")
         id_linear = model.get("id_linear")
@@ -153,7 +154,7 @@ class SVFR_Sampler:
         images=main_sampler(pipe, align_instance, net_arcface, id_linear, folder_paths.get_output_directory(), weight_dtype,
                           seed,input_frames_pil,task_ids,mask_array,save_video,decode_chunk_size,noise_aug_strength,
                           min_appearance_guidance_scale,max_appearance_guidance_scale,
-                          overlap,i2i_noise_strength,steps,n_sample_frames,device)
+                          overlap,i2i_noise_strength,steps,n_sample_frames,device,crop_face_region)
         
         #model.to("cpu")#显存不会自动释放，手动迁移，不然很容易OOM
         torch.cuda.empty_cache()
