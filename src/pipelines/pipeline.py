@@ -478,8 +478,8 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
         # 4. Encode input image using VAE
         needs_upcasting = (self.vae.dtype == torch.float16 or self.vae.dtype == torch.bfloat16) and self.vae.config.force_upcast
         vae_dtype = self.vae.dtype
-        if needs_upcasting:
-            self.vae.to(dtype=torch.float32)
+        # if needs_upcasting:
+        #     self.vae.to(dtype=torch.float32)
         
         # Prepare ref image latents
         ref_image_tensor = ref_image.to(
@@ -690,6 +690,8 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
             # cast back to fp16 if needed
             if needs_upcasting:
                 self.vae.to(dtype=vae_dtype)
+
+            #print(latents.shape,latents.dtype)    #torch.Size([1, 16, 4, 32, 32]) torch.float16
             frames = self.decode_latents(latents, num_frames, decode_chunk_size)
         else:
             frames = latents
