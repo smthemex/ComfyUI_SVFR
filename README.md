@@ -1,6 +1,11 @@
 # ComfyUI_SVFR
 [SVFR](https://github.com/wangzhiyaoo/SVFR/tree/main) is a unified framework for face video restoration that supports tasks such as BFR, Colorization, Inpainting，you can use it in ComfyUI
 
+# Update 2024/01/17
+* 同步SVFR最新的代码（涉及面部裁切及上色图片预处理），源码的vae上采样强制要求32的浮点数导致开启上采样时图片数据不匹配（运行高分辨率时），暂时修正；
+* Synchronize the latest SVFR code (involving facial cropping and color image preprocessing), the VAE upsampling in the source code requires a floating-point number of 32, which results in mismatched image data when upsampling is enabled (when running at high resolution). P temporarily correct this issue;
+
+
 # 1. Installation
 
 In the ./ComfyUI /custom_node directory, run the following:   
@@ -36,7 +41,7 @@ pip install -r requirements.txt
 * "bfr,colorization,inpainting,bfr_color,bfr_color_inpaint",inpainting and bfr_color_inpaint mode need a mask(use comfyUI mask or black/white jpg)
   
 # 5 Example
-![](https://github.com/smthemex/ComfyUI_SVFR/blob/main/exampleA.png)
+![](https://github.com/smthemex/ComfyUI_SVFR/blob/main/example.png)
 
 # 6 Citation
 ```
