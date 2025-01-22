@@ -1,7 +1,10 @@
 # ComfyUI_SVFR
 [SVFR](https://github.com/wangzhiyaoo/SVFR/tree/main) is a unified framework for face video restoration that supports tasks such as BFR, Colorization, Inpainting，you can use it in ComfyUI
 
-# Update 2024/01/17
+# Update 
+* 2024/01/22 fix face crop bug，the model is training base on 512*512，It is currently unclear whether a resolution greater than 512 will yield usable results。模型基于512训练，大于此的分辨率不清楚是否会有好的效果。
+
+* previous
 * 同步SVFR最新的代码（涉及面部裁切及上色图片预处理），源码的vae上采样强制要求32的浮点数导致开启上采样时图片数据不匹配（运行高分辨率时），暂时修正；
 * Synchronize the latest SVFR code (involving facial cropping and color image preprocessing), the VAE upsampling in the source code requires a floating-point number of 32, which results in mismatched image data when upsampling is enabled (when running at high resolution). P temporarily correct this issue;
 
