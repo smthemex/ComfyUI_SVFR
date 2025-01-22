@@ -156,14 +156,17 @@ def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_
 
     imSameIDs = []
     vid_gt = []
+    width,height=input_frames_pil[0].size
     for i, drive_idx in enumerate(drive_idx_list):
         imSameID = input_frames_pil[drive_idx]
         #imSameID = Image.fromarray(frame)
         if crop_face_region:
             imSameID = crop_resize_img(imSameID, bbox_s)
+            imSameID = imSameID.resize((width,height))
         if 1 in task_ids:
             imSameID = imSameID.convert("L")  # Convert to grayscale
             imSameID = imSameID.convert("RGB")
+        
         image_array = np.array(imSameID)
         if 2 in task_ids and isinstance(mask_array, np.ndarray):
             image_array[white_positions] = [255, 255, 255]  # mask for inpainting task
