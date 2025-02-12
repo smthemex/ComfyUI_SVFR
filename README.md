@@ -2,12 +2,7 @@
 [SVFR](https://github.com/wangzhiyaoo/SVFR/tree/main) is a unified framework for face video restoration that supports tasks such as BFR, Colorization, Inpainting，you can use it in ComfyUI
 
 # Update 
-* 2024/01/22 fix face crop bug，the model is training base on 512*512，It is currently unclear whether a resolution greater than 512 will yield usable results。模型基于512训练，大于此的分辨率不清楚是否会有好的效果。
-
-* previous
-* 同步SVFR最新的代码（涉及面部裁切及上色图片预处理），源码的vae上采样强制要求32的浮点数导致开启上采样时图片数据不匹配（运行高分辨率时），暂时修正；
-* Synchronize the latest SVFR code (involving facial cropping and color image preprocessing), the VAE upsampling in the source code requires a floating-point number of 32, which results in mismatched image data when upsampling is enabled (when running at high resolution). P temporarily correct this issue;
-
+* 24/02/12 修改模型加载模式为单体模型，此模型调用cofmy的vaae会偏色严重，所以只能用diffuser方法了/Change the model loading mode to a monolithic model
 
 # 1. Installation
 
@@ -28,15 +23,12 @@ pip install -r requirements.txt
 |   ├── unet.pth
 |   ├── yoloface_v5m.pt
 ```
- * 3.2 [stabilityai/stable-video-diffusion-img2vid-xt
-](https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt)  or [stabilityai/stable-video-diffusion-img2vid-xt-1-1](https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt-1-1) online or offline
+ * 3.2 [svd_xt.safetensors](https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt)  or [svd_xt_1_1.safetensors](https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt-1-1) 
 ```
-   if offline
-├── anypath/stable-video-diffusion-img2vid-xt/
-|   ├── model_index.json
-|   ├── vae...
-|   ├── unet...
-|   ...
+├── Comfyui/models/checkpoints/
+|   ├── svd_xt.safetensors or svd_xt_1_1.safetensors
+├── Comfyui/models/vae/
+|   ├──svd.ave.fp16.safetensors  #rename from stabilityai/stable-video-diffusion-img2vid-xt/vae 重命名repo下的vae模型既可以，不命名也行
 ```
 
 # 4 Inference mode
@@ -44,7 +36,7 @@ pip install -r requirements.txt
 * "bfr,colorization,inpainting,bfr_color,bfr_color_inpaint",inpainting and bfr_color_inpaint mode need a mask(use comfyUI mask or black/white jpg)
   
 # 5 Example
-![](https://github.com/smthemex/ComfyUI_SVFR/blob/main/example.png)
+![](https://github.com/smthemex/ComfyUI_SVFR/blob/main/exampleA.png)
 
 # 6 Citation
 ```
