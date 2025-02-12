@@ -4,7 +4,7 @@ import numpy as np
 import os
 import torch
 from .infer import main_loader,main_sampler
-from .node_utils import nomarl_upscale,tensor_upscale,cf_tensor2cv
+from .node_utils import nomarl_upscale,tensor_upscale
 
 import folder_paths
 
@@ -16,10 +16,7 @@ weigths_SVFR_current_path = os.path.join(folder_paths.models_dir, "SVFR")
 if not os.path.exists(weigths_SVFR_current_path):
     os.makedirs(weigths_SVFR_current_path)
 
-try:
-    folder_paths.add_model_folder_path("SVFR", weigths_SVFR_current_path, False)
-except:
-    folder_paths.add_model_folder_path("SVFR", weigths_SVFR_current_path)
+folder_paths.add_model_folder_path("SVFR", weigths_SVFR_current_path)
 
 
 class SVFR_LoadModel:
@@ -38,7 +35,8 @@ class SVFR_LoadModel:
                                  "id" in i]
         return {
             "required": {
-                "I2V_repo": ("STRING", {"default": "stabilityai/stable-video-diffusion-img2vid-xt"}),
+                "checkpoints": (folder_paths.get_filename_list("checkpoints"),),
+                "vae": (folder_paths.get_filename_list("vae"),),
                 "unet": (["none"] + unet_ckpt_list,),
                 "yolo_ckpt": (["none"] + yolo_ckpt_list,),
                 "id_ckpt": (["none"] + id_ckpt_list,),
@@ -52,8 +50,9 @@ class SVFR_LoadModel:
     FUNCTION = "main_loader"
     CATEGORY = "SVFR"
     
-    def main_loader(self,I2V_repo, unet, yolo_ckpt, id_ckpt, insightface,dtype):
+    def main_loader(self,checkpoints,vae, unet, yolo_ckpt, id_ckpt, insightface,dtype):
         
+        I2V_repo=os.path.join(current_path, "svd_repo")
         if dtype == "fp16":
             weight_dtype = torch.float16
         elif dtype == "fp32":
@@ -68,7 +67,9 @@ class SVFR_LoadModel:
             det_path=folder_paths.get_full_path("SVFR",yolo_ckpt)
             id_path=folder_paths.get_full_path("SVFR",id_ckpt)
             face_path=folder_paths.get_full_path("SVFR",insightface)
-            pipe,id_linear,net_arcface,align_instance=main_loader(weight_dtype,I2V_repo,unet_path,det_path,id_path,face_path,device,dtype)
+            UNET= folder_paths.get_full_path("checkpoints",checkpoints)
+            vae=folder_paths.get_full_path("vae",vae)
+            pipe,id_linear,net_arcface,align_instance=main_loader(weight_dtype,I2V_repo,UNET,vae,unet_path,det_path,id_path,face_path,device,dtype)
         print("****** Load model is done.******")
         return (
         {"pipe": pipe, "id_linear": id_linear, "net_arcface": net_arcface, "align_instance": align_instance, "weight_dtype": weight_dtype},)
@@ -151,6 +152,7 @@ class SVFR_Sampler:
             raise "If use inpainting need link a mask or a batch mask in the front."
         
         print("******** start infer *********")
+        
         images=main_sampler(pipe, align_instance, net_arcface, id_linear, folder_paths.get_output_directory(), weight_dtype,
                           seed,input_frames_pil,task_ids,mask_array,save_video,decode_chunk_size,noise_aug_strength,
                           min_appearance_guidance_scale,max_appearance_guidance_scale,
