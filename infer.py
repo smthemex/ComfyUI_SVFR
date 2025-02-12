@@ -3,17 +3,20 @@
 import warnings
 import os
 import numpy as np
+import safetensors.torch
 import torch
 import torch.utils.checkpoint
 from PIL import Image
 from diffusers import AutoencoderKLTemporalDecoder
 from diffusers.schedulers import EulerDiscreteScheduler
-from transformers import CLIPVisionModelWithProjection
 import torchvision.transforms as transforms
 import torch.nn.functional as F
 from torchvision.utils import save_image
 import random
 import cv2
+import safetensors 
+
+import gc
 # pipeline 
 from .src.pipelines.pipeline import LQ2VideoLongSVDPipeline
 from .src.utils.util import save_videos_grid, seed_everything
@@ -22,19 +25,28 @@ from .src.models import model_insightface_360k
 from .src.dataset.face_align.align import AlignImage
 from .src.models.svfr_adapter.unet_3d_svd_condition_ip import UNet3DConditionSVDModel
 from .src.dataset.dataset import get_affine_transform, mean_face_lm5p_256,get_union_bbox, process_bbox, crop_resize_img
-
+from .node_utils import tensor2pil
 warnings.filterwarnings("ignore")
 
 
-def main_loader(weight_dtype, repo, unet_path, det_path, id_path, face_path,device,dtype):
+def main_loader(weight_dtype, repo,UNET,VAE, unet_path, det_path, id_path, face_path,device,dtype):
 
-    vae = AutoencoderKLTemporalDecoder.from_pretrained(repo, subfolder="vae", variant=dtype)
+   
     val_noise_scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
-    image_encoder = CLIPVisionModelWithProjection.from_pretrained(repo, subfolder="image_encoder", variant=dtype)
-    unet = UNet3DConditionSVDModel.from_pretrained(repo, subfolder="unet", variant=dtype)
-    
+   
+    input_unet_dic=safetensors.torch.load_file(UNET)
+    unet_config=UNet3DConditionSVDModel.load_config(os.path.join(repo, "unet"))
+    unet=UNet3DConditionSVDModel.from_config(unet_config).to(weight_dtype)
+    unet.load_state_dict(input_unet_dic, strict=False)
+
+
     align_instance = AlignImage(device, det_path=det_path)
     
+    input_vae_dic=safetensors.torch.load_file(VAE)
+    vae_config=AutoencoderKLTemporalDecoder.load_config(os.path.join(repo, "vae"))
+    vae=AutoencoderKLTemporalDecoder.from_config(vae_config).to(weight_dtype)
+    vae.load_state_dict(input_vae_dic, strict=False)
+
     import torch.nn as nn
     class InflatedConv3d(nn.Conv2d):
         def forward(self, x):
@@ -62,43 +74,43 @@ def main_loader(weight_dtype, repo, unet_path, det_path, id_path, face_path,devi
     
     id_linear = IDProjConvModel(in_channels=512, out_channels=1024).to(device=device)
     
+    pre_unet_dict=torch.load(unet_path, map_location="cpu")
+    pre_linear_dict=torch.load(id_path, map_location="cpu")
+
     # load pretrained weights
-    unet.load_state_dict(
-        torch.load(unet_path, map_location="cpu"),
-        strict=True,
-    )
+    unet.load_state_dict(pre_unet_dict,strict=True,)
     
-    id_linear.load_state_dict(
-        torch.load(id_path, map_location="cpu"),
-        strict=True,
-    )
+    id_linear.load_state_dict(pre_linear_dict,strict=True,)
     
     net_arcface = model_insightface_360k.getarcface(face_path).eval().to(device=device)
     
-    image_encoder.to(weight_dtype)
+    #image_encoder.to(weight_dtype)
     vae.to(weight_dtype)
     unet.to(weight_dtype)
     id_linear.to(weight_dtype)
     net_arcface.requires_grad_(False).to(weight_dtype)
-    
+    del input_unet_dic, input_vae_dic, pre_unet_dict, pre_linear_dict
+    gc.collect()
+    torch.cuda.empty_cache()
     pipe = LQ2VideoLongSVDPipeline(
         unet=unet,
-        image_encoder=image_encoder,
+        #image_encoder=image_encoder,
         vae=vae,
         scheduler=val_noise_scheduler,
-        feature_extractor=None
-    
-    )
+        feature_extractor=None,
+        )
     pipe = pipe.to(device, dtype=unet.dtype)
     
     return pipe, id_linear, net_arcface, align_instance
 
 
-def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_dtype, seed, input_frames_pil, task_ids,
+def main_sampler(pipe,align_instance, net_arcface, id_linear, save_dir, weight_dtype, seed, input_frames_pil, task_ids,
                  mask_array,
                  save_video, decode_chunk_size, noise_aug_strength, min_appearance_guidance_scale,
                  max_appearance_guidance_scale,
                  overlap, i2i_noise_strength, steps, n_sample_frames,device,crop_face_region):
+    
+
     to_tensor = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
@@ -166,7 +178,6 @@ def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_
         if 1 in task_ids:
             imSameID = imSameID.convert("L")  # Convert to grayscale
             imSameID = imSameID.convert("RGB")
-        
         image_array = np.array(imSameID)
         if 2 in task_ids and isinstance(mask_array, np.ndarray):
             image_array[white_positions] = [255, 255, 255]  # mask for inpainting task
@@ -191,7 +202,7 @@ def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_
     task_ids = val_data["task_ids"]
     task_id_input = val_data["task_id_input"]
     height, width = val_data["pixel_values_vid_lq"].shape[-2:]
-    
+  
     print("Generating the first clip...")
     output = pipe(
         lq_frames[inter_frame_list[0]].to(device).to(weight_dtype),  # lq
@@ -211,11 +222,10 @@ def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_
         i2i_noise_strength=i2i_noise_strength,
     )
     video = output.frames
-    
     ref_img_tensor = video[0][:, -1]
+
     ref_img = (video[0][:, -1] * 0.5 + 0.5).clamp(0, 1) * 255.
     ref_img = ref_img.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
-    
     pts5 = align_instance(ref_img[:, :, [2, 1, 0]], maxface=True)[0][0]
     
     warp_mat = get_affine_transform(pts5, mean_face_lm5p_256 * height / 256)
@@ -246,10 +256,12 @@ def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_
         num_inference_steps=steps,
         i2i_noise_strength=i2i_noise_strength,
     ).frames
-    
+
+
     video = (video * 0.5 + 0.5).clamp(0, 1)
     video = torch.cat([video.to(device=device)], dim=0).cpu()  # torch.Size([1, 3, 160, 512, 512])
-    
+
+   
     if save_video:
         save_videos_grid(video, f"{save_dir}/{video_name[:-4]}_{seed}.mp4", n_rows=1, fps=25)
     
@@ -260,7 +272,7 @@ def main_sampler(pipe, align_instance, net_arcface, id_linear, save_dir, weight_
     #     for i in range(video.shape[1]):
     #         save_frames_path = os.path.join(f"{save_dir}/result_frames", f"{video_name[:-4]}_{seed}", f'{i:08d}.png')
     #         save_image(video[:,i], save_frames_path)
-    
+   
     return video.squeeze(0).permute(1, 2, 3, 0)  # bcthw to B,H,W,C
 
 
@@ -270,3 +282,4 @@ def get_overlap_slide_window_indices(video_length, window_size, window_overlap):
         inter_frame_list.append([e % video_length for e in range(j, min(j + window_size, video_length))])
     
     return inter_frame_list
+
