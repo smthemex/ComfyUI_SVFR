@@ -20,9 +20,7 @@ from diffusers import (
 from ..models.svfr_adapter.unet_3d_svd_condition_ip import UNet3DConditionSVDModel
 
 
-
 logger = logging.get_logger(__name__)
-
 
 
 def _append_dims(x, target_dims):
@@ -89,26 +87,29 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
             A `CLIPImageProcessor` to extract features from generated images.
     """
 
-    model_cpu_offload_seq = "image_encoder->unet->vae"
+    model_cpu_offload_seq = "unet->vae"
     _callback_tensor_inputs = ["latents"]
 
     def __init__(
         self,
         vae: AutoencoderKLTemporalDecoder,
-        image_encoder: CLIPVisionModelWithProjection,
+        #image_encoder: CLIPVisionModelWithProjection,
         unet: UNet3DConditionSVDModel,
         scheduler: EulerDiscreteScheduler,
         feature_extractor: CLIPImageProcessor,
+        vae_config=None,
+       
     ):
         super().__init__()
         self.register_modules(
             vae=vae,
-            image_encoder=image_encoder,
+            #image_encoder=image_encoder,
             unet=unet,
             scheduler=scheduler,
             feature_extractor=feature_extractor,
         )
         
+        self.vae_config=vae_config
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         
         # print("vae:", self.vae_scale_factor)
@@ -161,10 +162,18 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
         device,
         num_videos_per_prompt,
         do_classifier_free_guidance,
+        cf_vae,
+        use_cf=True,
     ):
-        image = image.to(device=device)
-        image_latents = self.vae.encode(image).latent_dist.mode()
-        # image_latents = image_latents * 0.18215
+        if not use_cf:
+            image = image.to(device=self.vae.device)
+            image_latents = self.vae.encode(image).latent_dist.mode()
+            image_latents = image_latents.to(device=device)
+        else:
+            image_latents = cf_vae.encode(image)
+            image_latents = image_latents.to(device=device)
+        #print("image_latents:", image_latents.shape) #torch.Size([20, 4, 64, 64])
+        #image_latents = image_latents * 0.18215
         image_latents = image_latents.unsqueeze(0)
         
         if do_classifier_free_guidance:
@@ -292,6 +301,8 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
         if timestep is not None:
             init_latents = ref_image_latents.unsqueeze(0)
             # init_latents = ref_image_latents.unsqueeze(1)
+            #print(f"noise.shape: {noise.shape}, init_latents.shape: {init_latents.shape}")
+            # print(init_latents.is_cuda,noise.is_cuda,timestep.is_cuda)
             latents = self.scheduler.add_noise(init_latents, noise, timestep)
         else:
             latents = noise * self.scheduler.init_noise_sigma
@@ -353,6 +364,8 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
         overlap=7,
         frames_per_batch=14,
         i2i_noise_strength=1.0,
+        cf_vae=None,
+        use_cf=False,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -448,6 +461,8 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
             else:
                 batch_size = ref_image.shape[0]
 
+        # if not use_cf:
+        #     self.vae=cf_vae
         device = self._execution_device
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
@@ -476,73 +491,116 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
         # fps = fps - 1
 
         # 4. Encode input image using VAE
-        needs_upcasting = (self.vae.dtype == torch.float16 or self.vae.dtype == torch.bfloat16) and self.vae.config.force_upcast
-        vae_dtype = self.vae.dtype
-        # if needs_upcasting:
-        #     self.vae.to(dtype=torch.float32)
-        
+        if not use_cf:
+            needs_upcasting = (self.vae.dtype == torch.float16 or self.vae.dtype == torch.bfloat16) and self.vae.config.force_upcast
+            vae_dtype = self.vae.dtype
+            # if needs_upcasting:
+            #     self.vae.to(dtype=torch.float32) #     vae_dtype = torch.float32
+        else:
+            needs_upcasting=False
+            vae_dtype=cf_vae.vae_dtype
+
+       
+        if not use_cf:
         # Prepare ref image latents
-        ref_image_tensor = ref_image.to(
-            dtype=self.vae.dtype, device=self.vae.device
-        )
+           ref_image_tensor = ref_image.to(device=self.vae.device,dtype=self.vae.dtype, )
+        #print(ref_image.shape)
+        else:
+           ref_image_tensor = ref_image.to(dtype=vae_dtype) #torch.Size([16, 3, 512, 512])
         
         # bsz = ref_image_tensor.shape[0]
         # ref_image_tensor = rearrange(ref_image_tensor,'b f c h w-> (b f) c h w')
-        chunk_size = 20
-        ref_image_latents = []
-        for chunk_idx in range((ref_image_tensor.shape[0]//chunk_size)+1):
-            if chunk_idx*chunk_size>=num_frames: break
-            ref_image_latent = self.vae.encode(ref_image_tensor[chunk_idx*chunk_size:(chunk_idx+1)*chunk_size]).latent_dist.mean #TODO
-            ref_image_latents.append(ref_image_latent)
-        ref_image_latents = torch.cat(ref_image_latents,dim=0)
-        # print(ref_image_tensor.shape,ref_image_latents.shape)
-        ref_image_latents = ref_image_latents * 0.18215  # (f, 4, h, w)
-        # ref_image_latents = rearrange(ref_image_latents, '(b f) c h w-> b f c h w', b=bsz)
+        if not use_cf:
+            chunk_size = 20
+            ref_image_latents = []
+            for chunk_idx in range((ref_image_tensor.shape[0]//chunk_size)+1):
+                if chunk_idx*chunk_size>=num_frames: break
+                ref_image_latent = self.vae.encode(ref_image_tensor[chunk_idx*chunk_size:(chunk_idx+1)*chunk_size]).latent_dist.mean #TODO
+                ref_image_latents.append(ref_image_latent)
+            ref_image_latents = torch.cat(ref_image_latents,dim=0)
+            # print(ref_image_tensor.shape,ref_image_latents.shape)
+            ref_image_latents = ref_image_latents * 0.18215  # (f, 4, h, w)
+            # ref_image_latents = rearrange(ref_image_latents, '(b f) c h w-> b f c h w', b=bsz)
 
-        noise = randn_tensor(
-            ref_image_tensor.shape, 
-            generator=generator, 
-            device=self.vae.device, 
-            dtype=self.vae.dtype)
-        
-        ref_image_tensor = ref_image_tensor + noise_aug_strength * noise
+            noise = randn_tensor(
+                ref_image_tensor.shape, 
+                generator=generator, 
+                device=self.vae.device, 
+                dtype=self.vae.dtype)
+            
+            ref_image_tensor = ref_image_tensor + noise_aug_strength * noise
 
-        image_latents = []
-        for chunk_idx in range((ref_image_tensor.shape[0]//chunk_size)+1):
-            if chunk_idx*chunk_size>=num_frames: break
-            image_latent = self._encode_vae_image(
-                ref_image_tensor[chunk_idx*chunk_size:(chunk_idx+1)*chunk_size],
-                device=device,
-                num_videos_per_prompt=num_videos_per_prompt,
-                do_classifier_free_guidance=do_classifier_free_guidance,
-            )
-            image_latents.append(image_latent)
-        image_latents = torch.cat(image_latents, dim=1)
-        # print(ref_image_tensor.shape,image_latents.shape)
-        # print(image_latents.shape)
-        image_latents = image_latents.to(image_embeddings.dtype)
-        ref_image_latents = ref_image_latents.to(image_embeddings.dtype)
-        
+            image_latents = []
+            for chunk_idx in range((ref_image_tensor.shape[0]//chunk_size)+1):
+                if chunk_idx*chunk_size>=num_frames: break
+                image_latent = self._encode_vae_image(
+                    ref_image_tensor[chunk_idx*chunk_size:(chunk_idx+1)*chunk_size],
+                    device=device,
+                    num_videos_per_prompt=num_videos_per_prompt,
+                    do_classifier_free_guidance=do_classifier_free_guidance,
+                    cf_vae=cf_vae,
+                    use_cf=use_cf,
+                )
+                image_latents.append(image_latent)
+            image_latents = torch.cat(image_latents, dim=1)
+            # print(ref_image_tensor.shape,image_latents.shape)
+            # print(image_latents.shape)
+            image_latents = image_latents.to(image_embeddings.dtype)
+            ref_image_latents = ref_image_latents.to(image_embeddings.dtype)
+        else:
+            chunk_size = 20
+            ref_image_latents = []
+            for chunk_idx in range((ref_image_tensor.shape[0]//chunk_size)+1):
+                if chunk_idx*chunk_size>=num_frames: break
+                ref_image_latent=cf_vae.encode(ref_image_tensor[chunk_idx*chunk_size:(chunk_idx+1)*chunk_size].permute(0,2,3,1))
+                ref_image_latent.to(device=device,dtype=vae_dtype)
+                ref_image_latents.append(ref_image_latent)
+            ref_image_latents = torch.cat(ref_image_latents,dim=0)
+            ref_image_latents = ref_image_latents * 0.18215  # (f, 4, h, w)
+          
+            image_latents = []
+            for chunk_idx in range((ref_image_tensor.shape[0]//chunk_size)+1):
+                if chunk_idx*chunk_size>=num_frames: break
+                img_l=cf_vae.encode(ref_image_tensor[chunk_idx*chunk_size:(chunk_idx+1)*chunk_size].permute(0,2,3,1))
+                image_latents_ = torch.cat([img_l.unsqueeze(0), img_l.unsqueeze(0)])
+                image_latents.append(image_latents_)
+            image_latents = torch.cat(image_latents, dim=1) #torch.Size([16, 3, 512, 512]) torch.Size([32, 4, 64, 64]) 
+            image_latents = image_latents.to(device,vae_dtype)
+            ref_image_latents = ref_image_latents.to(device,vae_dtype)
+        #print(ref_image_tensor.shape,image_latents.shape,1)
+
         # cast back to fp16 if needed
-        if needs_upcasting:
-            self.vae.to(dtype=vae_dtype)
+        if not use_cf:
+            if needs_upcasting:
+                self.vae.to(dtype=vae_dtype)
         
         # Repeat the image latents for each frame so we can concatenate them with the noise
         # image_latents [batch, channels, height, width] ->[batch, num_frames, channels, height, width]
         # image_latents = image_latents.unsqueeze(1).repeat(1, num_frames, 1, 1, 1)        
 
-        if ref_concat_image is not None:
-            ref_concat_tensor = ref_concat_image.to(
-                dtype=self.vae.dtype, device=self.vae.device
-            )
-            ref_concat_tensor = self.vae.encode(ref_concat_tensor.unsqueeze(0)).latent_dist.mode()
-            ref_concat_tensor = ref_concat_tensor.unsqueeze(0).repeat(1,num_frames,1,1,1)
-            ref_concat_tensor = torch.cat([torch.zeros_like(ref_concat_tensor), ref_concat_tensor]) if do_classifier_free_guidance else ref_concat_tensor
-            ref_concat_tensor = ref_concat_tensor.to(image_embeddings)
+        if not use_cf:
+            if ref_concat_image is not None:
+                ref_concat_tensor = ref_concat_image.to(
+                    dtype=self.vae.dtype, device=self.vae.device
+                )
+                ref_concat_tensor = self.vae.encode(ref_concat_tensor.unsqueeze(0)).latent_dist.mode()
+                ref_concat_tensor = ref_concat_tensor.unsqueeze(0).repeat(1,num_frames,1,1,1)
+                ref_concat_tensor = torch.cat([torch.zeros_like(ref_concat_tensor), ref_concat_tensor]) if do_classifier_free_guidance else ref_concat_tensor
+                ref_concat_tensor = ref_concat_tensor.to(image_embeddings)
+            else:
+                ref_concat_tensor = torch.zeros_like(image_latents)
         else:
-            ref_concat_tensor = torch.zeros_like(image_latents)
+            if ref_concat_image is not None:
+                ref_concat_tensor = ref_concat_image #torch.Size([3, 512, 512])
+                #print(ref_concat_tensor.shape)
+                #ref_concat_tensor = self.vae.encode(ref_concat_tensor.unsqueeze(0)).latent_dist.mode()
+                ref_concat_tensor = cf_vae.encode(ref_concat_tensor.unsqueeze(0).permute(0,2,3,1))
+                ref_concat_tensor = ref_concat_tensor.unsqueeze(0).repeat(1,num_frames,1,1,1)
+                ref_concat_tensor = torch.cat([torch.zeros_like(ref_concat_tensor), ref_concat_tensor]) if do_classifier_free_guidance else ref_concat_tensor
+                ref_concat_tensor = ref_concat_tensor.to(device=device,dtype=vae_dtype)
+            else:
+                ref_concat_tensor = torch.zeros_like(image_latents).to(device=device,dtype=vae_dtype)
 
-        
          # 5. Get Added Time IDs
         added_time_ids = self._get_add_time_ids(
             task_id_input,
@@ -561,6 +619,7 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
 
         # 5. Prepare latent variables
         num_channels_latents = self.unet.config.in_channels
+        
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
             num_frames,
@@ -573,8 +632,10 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
             latents,
             ref_image_latents,
             timestep=latent_timestep
-        )
+            )
         
+        #print(latents.shape)#torch.Size([1, 54, 4, 32, 32])
+
         # 7. Prepare guidance scale
         guidance_scale = torch.linspace(
             min_guidance_scale, 
@@ -694,6 +755,7 @@ class LQ2VideoLongSVDPipeline(DiffusionPipeline):
             #print(latents.shape,latents.dtype)    #torch.Size([1, 16, 4, 32, 32]) torch.float16
             frames = self.decode_latents(latents, num_frames, decode_chunk_size)
         else:
+            
             frames = latents
 
         self.maybe_free_model_hooks()
