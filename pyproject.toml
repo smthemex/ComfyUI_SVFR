@@ -2,7 +2,7 @@
 name = "comfyui_svfr"
 description = "SVFR is a unified framework for face video restoration that supports tasks such as BFR, Colorization, Inpainting，you can use it in ComfyUI"
 version = "1.0.0"
-license = "LICENSE"
+license = { file = "LICENSE" }
 dependencies = ["accelerate", "diffusers", "moviepy", "numpy", "omegaconf", "opencv-python", "scikit-video", "transformers"]
 
 [project.urls]
