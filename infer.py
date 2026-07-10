@@ -39,8 +39,9 @@ def main_loader(weight_dtype, repo,UNET,VAE, unet_path, det_path, id_path, face_
     unet=UNet3DConditionSVDModel.from_config(unet_config).to(weight_dtype)
     unet.load_state_dict(input_unet_dic, strict=False)
 
-
+    
     align_instance = AlignImage(device, det_path=det_path)
+   
     
     input_vae_dic=safetensors.torch.load_file(VAE)
     vae_config=AutoencoderKLTemporalDecoder.load_config(os.path.join(repo, "vae"))
@@ -226,12 +227,14 @@ def main_sampler(pipe,align_instance, net_arcface, id_linear, save_dir, weight_d
 
     ref_img = (video[0][:, -1] * 0.5 + 0.5).clamp(0, 1) * 255.
     ref_img = ref_img.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
-    pts5 = align_instance(ref_img[:, :, [2, 1, 0]], maxface=True)[0][0]
-    
+    align_result = align_instance(ref_img[:, :, [2, 1, 0]], maxface=True)
+    if not align_result or not align_result[0]:
+        raise ValueError("Face alignment failed in the generated reference image. Cannot proceed without a valid face for ID extraction.")
+    pts5 = align_result[0][0]
     warp_mat = get_affine_transform(pts5, mean_face_lm5p_256 * height / 256)
     ref_img = cv2.warpAffine(np.array(Image.fromarray(ref_img)), warp_mat, (height, width), flags=cv2.INTER_CUBIC)
-    ref_img = to_tensor(ref_img).to(device).to(weight_dtype)
-    
+
+    ref_img = to_tensor(ref_img).to(device).to(weight_dtype)    
     save_image(ref_img * 0.5 + 0.5, f"{save_dir}/ref_img_align.png")
     
     ref_img = F.interpolate(ref_img.unsqueeze(0)[:, :, 0:224, 16:240], size=[112, 112], mode='bilinear')
